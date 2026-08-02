@@ -9,3 +9,9 @@ pyadi-iio==0.0.21
 
 # visualize.py only; main.py and diagnose.py do not need it.
 matplotlib>=3.5
+
+# GUI toolkit for the live plot window. matplotlib cannot open a window
+# without one -- with no toolkit installed it falls back to a file-only
+# backend and plt.show() silently does nothing. PyQt goes in the venv, so
+# no system packages are needed (tkinter cannot be pip-installed).
+PyQt5>=5.15

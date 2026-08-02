@@ -1,8 +1,14 @@
 """Live range profile and waterfall display.
 
-    python visualize.py              # live, from the Pluto
-    python visualize.py --demo       # simulated data, no hardware needed
+    python visualize.py                      # live, from the Pluto
+    python visualize.py --demo               # simulated data, no hardware
+    python visualize.py --save out.gif       # headless, write a file
     python visualize.py --max-range 2000
+
+A live window needs a GUI toolkit. matplotlib cannot draw one from the
+standard library alone -- without tkinter, Qt or GTK it falls back to the
+non-interactive Agg backend and plt.show() does nothing at all. --save works
+regardless, and the script says so rather than opening nothing.
 
 The top panel is the current range profile with the detection threshold
 drawn on it. The bottom panel is a waterfall of recent profiles, time
@@ -17,13 +23,47 @@ import argparse
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+from matplotlib.animation import FuncAnimation, PillowWriter
 
 import main as cfg
 from radar_functions.chirp import chirp
 from radar_functions.dechirp import C, range_profile
 
 WATERFALL_ROWS = 120
+
+# Backends that render to a file and cannot open a window.
+NON_INTERACTIVE = {"agg", "pdf", "ps", "svg", "cairo", "template"}
+
+# Tried in order when the default turns out to be non-interactive.
+INTERACTIVE_BACKENDS = ["QtAgg", "TkAgg", "GTK4Agg", "GTK3Agg", "MacOSX"]
+
+
+def select_interactive_backend():
+    """Switch to a backend that can open a window. True if one was found."""
+    if matplotlib.get_backend().lower() not in NON_INTERACTIVE:
+        return True
+
+    for name in INTERACTIVE_BACKENDS:
+        try:
+            matplotlib.use(name, force=True)
+        except Exception:
+            continue
+        if matplotlib.get_backend().lower() not in NON_INTERACTIVE:
+            return True
+
+    return False
+
+
+def explain_no_display():
+    print("\nNo interactive matplotlib backend is available, so there is no")
+    print("way to open a window. matplotlib needs a GUI toolkit, and none is")
+    print("installed -- this is separate from having a display.")
+    print("\nEither install a toolkit:")
+    print("    pip install PyQt5            # into the venv, no sudo")
+    print("    sudo apt install python3-tk  # system-wide alternative")
+    print("\nor write a file instead, which needs no toolkit:")
+    print("    python visualize.py --demo --save radar.gif")
+    print("    python visualize.py --demo --save radar.png")
 
 
 class PlutoSource:
@@ -130,7 +170,16 @@ def main():
                         help="simulated data instead of hardware")
     parser.add_argument("--max-range", type=float, default=2000.0,
                         help="range axis limit in metres (default 2000)")
+    parser.add_argument("--save", metavar="FILE",
+                        help="write to FILE instead of opening a window; "
+                             ".gif animates, .png snapshots the last frame")
+    parser.add_argument("--frames", type=int, default=120,
+                        help="frames to capture when using --save")
     args = parser.parse_args()
+
+    if not args.save and not select_interactive_backend():
+        explain_no_display()
+        return None
 
     T = cfg.N / cfg.FS
     k = cfg.B / T
@@ -200,11 +249,27 @@ def main():
 
         return line, threshold_line, marker, status, image
 
-    animation = FuncAnimation(fig, update, interval=100, blit=False,
-                              cache_frame_data=False)
-
     try:
-        plt.show()
+        if args.save:
+            if args.save.lower().endswith(".gif"):
+                animation = FuncAnimation(fig, update, frames=args.frames,
+                                          interval=100, blit=False,
+                                          cache_frame_data=False)
+                print("Rendering %d frames to %s ..."
+                      % (args.frames, args.save))
+                animation.save(args.save, writer=PillowWriter(fps=10))
+            else:
+                for frame in range(args.frames):
+                    update(frame)
+                fig.savefig(args.save, dpi=110)
+            print("Wrote %s" % args.save)
+        else:
+            # Held in a local that outlives plt.show(); a FuncAnimation that
+            # gets garbage collected stops rendering and warns.
+            animation = FuncAnimation(fig, update, interval=100, blit=False,
+                                      cache_frame_data=False)
+            plt.show()
+            del animation
     except KeyboardInterrupt:
         pass
     finally:
@@ -212,7 +277,7 @@ def main():
         print("plotted %d buffers, skipped %d"
               % (counts["plotted"], counts["skipped"]))
 
-    return animation
+    return None
 
 
 if __name__ == "__main__":
