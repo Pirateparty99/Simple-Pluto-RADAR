@@ -217,7 +217,16 @@ def choose_rx_gain(sdr, reference):
     best = None
     best_dbfs = None
     sweep = []
-    for gain in range(RX_GAIN_MAX, RX_GAIN_MIN - 1, -10):
+
+    # The step lands on 1, not on RX_GAIN_MIN, so add the minimum explicitly.
+    # Without it the sweep can fall back to a gain it never measured and
+    # report "even at minimum gain the floor is too high" when the minimum
+    # would in fact have been fine.
+    gains = list(range(RX_GAIN_MAX, RX_GAIN_MIN, -10))
+    if RX_GAIN_MIN not in gains:
+        gains.append(RX_GAIN_MIN)
+
+    for gain in gains:
         sdr.rx_hardwaregain_chan0 = gain
         result = measure(sdr, None)
         sweep.append((gain, result))

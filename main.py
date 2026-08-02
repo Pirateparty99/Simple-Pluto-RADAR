@@ -20,8 +20,12 @@ FC = 2_450_000_000          # carrier frequency, Hz
 N = 4096                    # samples per chirp
 B = 16_000_000              # chirp bandwidth, Hz -- keep below FS
 RX_BUFFER_SIZE = 2 * N      # must exceed N so a whole chirp is always captured
-TX_GAIN = -40               # dB -- start low, especially behind a PA
-RX_GAIN = 30                # dB
+# Measured with diagnose.py on a clean run: lock quality ~2100, no clipping,
+# noise floor -21 dBFS. RX_GAIN is at the AD9361 minimum because two powered
+# LNAs already supply ~40 dB ahead of the Pluto. Re-run diagnose.py after any
+# change to the RF chain.
+TX_GAIN = -70               # dB -- start low, especially behind a PA
+RX_GAIN = -3                # dB -- AD9361 minimum; range is [-3, 71]
 
 # AD9361 analog filter bandwidth. The Pluto defaults to 18 MHz, which only
 # just contains a 16 MHz sweep -- the chirp edges land on the filter skirt

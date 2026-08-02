@@ -79,6 +79,9 @@ Live range profile plus a waterfall of recent profiles. `--demo` runs on
 simulated data with no hardware attached, which is the quickest way to see
 what a working setup should look like.
 
+`requirements.txt` installs PyQt5 for the window. `--save radar.gif` or
+`--save radar.png` writes a file instead, which needs no GUI toolkit at all.
+
 ## Documentation
 
 - [docs/usage.md](docs/usage.md) — setup, running, parameter reference, and

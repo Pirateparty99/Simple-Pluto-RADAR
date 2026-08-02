@@ -125,8 +125,8 @@ their own, so you can change the waveform without touching them.
 | `N` | 4096 | Samples per chirp; with `FS` this sets the chirp duration |
 | `B` | 16 MHz | Swept bandwidth — sets range resolution |
 | `RX_BUFFER_SIZE` | 8192 | Samples per RX buffer; **must be > `N`** so a whole chirp is always captured |
-| `TX_GAIN` | -40 dB | TX hardware gain (negative is attenuation; start low, especially behind a PA) |
-| `RX_GAIN` | 30 dB | RX hardware gain |
+| `TX_GAIN` | -70 dB | TX hardware gain (negative is attenuation; start low, especially behind a PA) |
+| `RX_GAIN` | -3 dB | RX hardware gain. Range is [-3, 71]; the minimum suits a chain with powered LNAs |
 | `TX_SCALE` | 16384 | Peak I/Q value of the transmitted waveform — see below |
 | `ADC_FULL_SCALE` | 2048 | ADC full scale, for dBFS. The AD9361 is 12-bit |
 | `MIN_RANGE_CELLS` | 5 | Range cells to skip at zero range, where TX leakage dominates |
@@ -253,7 +253,34 @@ Useful flags:
 ```bash
 python visualize.py --demo             # simulated data, no hardware needed
 python visualize.py --max-range 500    # zoom the range axis
+python visualize.py --save radar.gif   # headless, write a file
 ```
+
+### If no window opens
+
+`requirements.txt` installs PyQt5, so this should just work. If you built the
+venv before that was added, re-run `./setup_env.sh`.
+
+The underlying constraint: matplotlib cannot draw a window from the standard
+library alone. Without a GUI toolkit it falls back to the non-interactive Agg
+backend, where `plt.show()` does nothing. **This is separate from having a
+display** — `DISPLAY` can be set and the window will still never appear. Note
+that tkinter cannot be pip-installed; it comes from the system
+`python3-tk` package, which is why PyQt is the better fit for a
+self-contained venv.
+
+`visualize.py` detects a missing toolkit and prints the remedies rather than
+exiting silently.
+
+You can also skip the window entirely — `--save` needs no toolkit:
+
+```bash
+python visualize.py --demo --save radar.gif --frames 120
+python visualize.py --demo --save radar.png
+```
+
+`.gif` animates over `--frames` buffers; any other extension writes a single
+image of the final frame, waterfall history included.
 
 `--demo` synthesises leakage at zero range plus a target moving between 200
 and 1600 m. Use it to confirm the display works and to see what a healthy
