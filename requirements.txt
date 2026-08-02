@@ -1,0 +1,11 @@
+# Runtime dependencies for Simple-Pluto-RADAR.
+#
+# pyadi-iio pulls in pylibiio, which is only a ctypes wrapper around the
+# native libiio shared library. libiio itself is NOT installed by pip --
+# see docs/usage.md for the per-OS install step.
+
+numpy>=1.20
+pyadi-iio==0.0.21
+
+# visualize.py only; main.py and diagnose.py do not need it.
+matplotlib>=3.5
