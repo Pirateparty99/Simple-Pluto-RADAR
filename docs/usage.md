@@ -111,22 +111,82 @@ no target  (best bin -89.3 dBFS is only 10.8 dB over noise -100.1 dBFS, lock 411
 
 Ctrl-C stops it and tears down the TX buffer so the Pluto stops transmitting.
 
-## 4. Configuration
+## 4. Bands
 
-Every parameter lives at the top of [`main.py`](../main.py). The radar
-functions in `radar_functions/` take these as arguments and hold no config of
-their own, so you can change the waveform without touching them.
+Frequency and gains travel together as a **band profile**, because path loss,
+LNA gain and the ambient noise floor all change with frequency — one global
+pair of gain constants would be wrong for every band but one.
+
+```bash
+python main.py --list-bands
+python main.py --band ism-2400
+```
+
+`--band` and `--callsign` work identically on `main.py`, `diagnose.py` and
+`visualize.py`, so all three tune and set gains the same way.
+
+| Profile | Centre | Basis | Gains |
+| --- | --- | --- | --- |
+| `ism-2400` | 2.450 GHz | Part 15 ISM | tx -70, rx -3 — **measured** |
+| `ism-5800` | 5.800 GHz | Part 15 ISM | provisional |
+| `ham-13cm` | 2.400 GHz | Part 97 amateur | provisional |
+| `ham-5cm` | 5.690 GHz | Part 97 amateur | provisional |
+
+The default is `ism-5800`. Profiles marked provisional have not been measured
+on this hardware; `main.py` says so at startup and you should run
+`diagnose.py` before trusting them.
+
+### Non-ISM transmission is disabled
+
+`bands.ALLOW_NON_ISM_TRANSMIT` is `False`. While it is, selecting an amateur
+profile is refused outright — before the radio is configured and before any
+carrier exists — regardless of whether a callsign is set.
+
+Turning it on is a deliberate edit to `bands.py`, not a command-line flag,
+because it carries regulatory consequences. The amateur profiles and the
+station-identification machinery below are complete and tested, but
+unreachable until then.
+
+### Station identification
+
+Amateur operation requires your callsign at least every 10 minutes and at the
+end of transmission (47 CFR 97.119). When an amateur profile is enabled and
+selected, `main.py` sends it automatically in CW at 15 WPM — at startup, every
+9 minutes, and on Ctrl-C.
+
+The callsign is resolved, in order of precedence, from `--callsign`, the
+`RADAR_CALLSIGN` environment variable, or
+`~/.config/simple-pluto-radar/callsign`. An amateur profile with no callsign
+configured is refused.
+
+Identification keys the transmit gain rather than generating the message as
+samples. At 20 MSPS a spelled-out callsign runs to about 100 million samples,
+twelve times the Pluto's 2²³ buffer limit, so sample-by-sample keying is not
+transmittable. Gain keying needs one small cyclic tone buffer and gives about
+89 dB of on/off ratio.
+
+**Not legal advice.** Verify allocations against current FCC Part 97 and your
+own licence privileges before transmitting. Amateur status is secondary in
+parts of these ranges and allocations here have been changing.
+
+## 5. Configuration
+
+Waveform parameters live at the top of [`main.py`](../main.py); frequency and
+gains come from the selected band profile in [`bands.py`](../bands.py). The
+radar functions in `radar_functions/` take everything as arguments and hold no
+configuration of their own, so you can change the waveform without touching
+them.
 
 | Constant | Default | Meaning |
 | --- | --- | --- |
 | `URI` | `ip:pluto.local` | Pluto address; try `ip:192.168.2.1` over USB |
 | `FS` | 20 MHz | Sample rate — sets the baseband width and the RX rate |
-| `FC` | 2.45 GHz | Carrier frequency for both TX and RX LOs. Sits mid-WiFi; see the interference note in troubleshooting |
+| `FC` | from band | Carrier frequency for both TX and RX LOs — set by `--band`, see section 4 |
 | `N` | 4096 | Samples per chirp; with `FS` this sets the chirp duration |
 | `B` | 16 MHz | Swept bandwidth — sets range resolution |
 | `RX_BUFFER_SIZE` | 8192 | Samples per RX buffer; **must be > `N`** so a whole chirp is always captured |
-| `TX_GAIN` | -70 dB | TX hardware gain (negative is attenuation; start low, especially behind a PA) |
-| `RX_GAIN` | -3 dB | RX hardware gain. Range is [-3, 71]; the minimum suits a chain with powered LNAs |
+| `TX_GAIN` | from band | TX hardware gain (negative is attenuation) — set by `--band`, measured per band |
+| `RX_GAIN` | from band | RX hardware gain, AD9361 range [-3, 71] — set by `--band` |
 | `TX_SCALE` | 16384 | Peak I/Q value of the transmitted waveform — see below |
 | `ADC_FULL_SCALE` | 2048 | ADC full scale, for dBFS. The AD9361 is 12-bit |
 | `MIN_RANGE_CELLS` | 5 | Range cells to skip at zero range, where TX leakage dominates |
@@ -176,7 +236,7 @@ chirp with a matched filter, but that only works if a complete chirp is
 present in the buffer — hence `2 * N`. Setting `RX_BUFFER_SIZE = N` raises a
 `ValueError`.
 
-## 5. How the processing works
+## 6. How the processing works
 
 ```
 chirp(N, B, FS, TX_SCALE)  generate the reference, transmit it cyclically
@@ -237,7 +297,7 @@ If a target ever outshines the leakage, the profile silently re-references
 itself to that target and all ranges shift. For absolute range you need a
 coupled sample of TX on a second RX channel.
 
-## 6. Visualization
+## 7. Visualization
 
 ```bash
 python visualize.py
@@ -294,7 +354,7 @@ and the plotted/skipped tally.
 This needs matplotlib, which `requirements.txt` installs. `main.py` and
 `diagnose.py` do not.
 
-## 7. Transmitting responsibly
+## 8. Transmitting responsibly
 
 2.45 GHz is a shared ISM band. Keep `TX_GAIN` low, prefer a wired or heavily
 attenuated path while developing, and do not leave the cyclic buffer
@@ -302,7 +362,7 @@ transmitting when you are not actively testing. Ctrl-C handles that; killing
 the process another way may leave the Pluto transmitting until it is
 re-initialized or power-cycled.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 **`ModuleNotFoundError: No module named 'adi'`**
 The venv is not activated, or `setup_env.sh` did not finish. Re-run it.
@@ -416,11 +476,13 @@ silently ignored.
 
 ```
 main.py                     Config + hardware setup + the run loop
+bands.py                    Band profiles, licence interlock, transmit policy
 diagnose.py                 Band survey, gain sweeps: is the chirp reaching RX?
 visualize.py                Live range profile + waterfall (--demo works offline)
 radar_functions/
     chirp.py                FMCW chirp generation
     dechirp.py              Alignment, dechirp, range FFT, dBFS conversion
+    morse.py                CW station identification
 requirements.txt            Python dependencies
 setup-dependencies.sh       libiio + venv in one step (Debian/Ubuntu)
 setup_env.sh                venv setup for Linux/macOS

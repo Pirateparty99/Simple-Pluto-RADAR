@@ -25,6 +25,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 
+import bands
 import main as cfg
 from radar_functions.chirp import chirp
 from radar_functions.dechirp import C, range_profile
@@ -165,7 +166,11 @@ def build_figure(ranges, max_range):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=bands.listing(),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    cfg.add_band_arguments(parser)
     parser.add_argument("--demo", action="store_true",
                         help="simulated data instead of hardware")
     parser.add_argument("--max-range", type=float, default=2000.0,
@@ -176,6 +181,14 @@ def main():
     parser.add_argument("--frames", type=int, default=120,
                         help="frames to capture when using --save")
     args = parser.parse_args()
+
+    try:
+        band, callsign = cfg.apply_band(args.band, args.callsign)
+    except (bands.PolicyError, bands.LicenceError) as exc:
+        print("REFUSED: %s" % exc)
+        raise SystemExit(2)
+
+    cfg.describe_band(band, callsign)
 
     if not args.save and not select_interactive_backend():
         explain_no_display()

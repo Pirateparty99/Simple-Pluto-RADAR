@@ -1,8 +1,13 @@
+import argparse
+import time
+
 import adi
 import numpy as np
 
+import bands
 from radar_functions.chirp import chirp
 from radar_functions.dechirp import C, range_profile
+from radar_functions.morse import cw_tone, key_pattern
 
 # Radar configuration
 URI = "ip:pluto.local"      # or your Pluto URI
@@ -16,16 +21,24 @@ URI = "ip:pluto.local"      # or your Pluto URI
 # An antenna on TX2 receives nothing; anything that reaches RX in that
 # configuration is stray leakage from the TX1 connector.
 FS = 20_000_000             # sample rate, Hz
-FC = 2_450_000_000          # carrier frequency, Hz
+
+# Carrier frequency, from the selected band profile. apply_band() overwrites
+# this; the value here is what an importer sees before any band is chosen.
+FC = bands.BANDS[bands.DEFAULT_BAND].fc     # Hz
+
+# Station identification, for amateur-band operation only.
+ID_WPM = 15                 # keying speed
+ID_TONE_HZ = 1000.0         # offset from the carrier, away from DC
+ID_KEY_OFF_GAIN = -89       # AD9361 transmit attenuation floor, key-up
 N = 4096                    # samples per chirp
 B = 16_000_000              # chirp bandwidth, Hz -- keep below FS
 RX_BUFFER_SIZE = 2 * N      # must exceed N so a whole chirp is always captured
-# Measured with diagnose.py on a clean run: lock quality ~2100, no clipping,
-# noise floor -21 dBFS. RX_GAIN is at the AD9361 minimum because two powered
-# LNAs already supply ~40 dB ahead of the Pluto. Re-run diagnose.py after any
-# change to the RF chain.
-TX_GAIN = -70               # dB -- start low, especially behind a PA
-RX_GAIN = -3                # dB -- AD9361 minimum; range is [-3, 71]
+# Gains are band-specific and live in bands.py alongside the frequency, since
+# path loss, LNA gain and the noise floor all change with frequency. These
+# are the DEFAULT_BAND values; apply_band() overwrites them when a band is
+# selected. Re-run diagnose.py after any change to the RF chain.
+TX_GAIN = bands.BANDS[bands.DEFAULT_BAND].tx_gain   # dB
+RX_GAIN = bands.BANDS[bands.DEFAULT_BAND].rx_gain   # dB; AD9361 range [-3, 71]
 
 # AD9361 analog filter bandwidth. The Pluto defaults to 18 MHz, which only
 # just contains a 16 MHz sweep -- the chirp edges land on the filter skirt
@@ -133,7 +146,108 @@ def print_config():
     print("unambiguous to  : %.0f m" % ((FS / 2) * C / (2 * k)))
 
 
-def main():
+def send_station_id(sdr, callsign, reference):
+    """Interrupt the radar to transmit the callsign in CW, then resume.
+
+    The tone is a small cyclic buffer and the keying is done by switching
+    the transmit gain. Spelling the message out in samples would need about
+    a hundred million of them at radar sample rates -- twelve times the
+    Pluto's 2**23 buffer limit -- so gain keying is the practical route. It
+    gives roughly 89 dB of on/off ratio, which is plainly readable.
+
+    Buffers missed during identification are simply not captured, which the
+    run loop already tolerates.
+    """
+    segments = key_pattern(callsign, ID_WPM)
+    seconds = sum(s for _, s in segments)
+    print("station ID: %s (%.1f s CW)" % (callsign, seconds))
+
+    sdr.tx_destroy_buffer()
+
+    tone = cw_tone(FS, TX_SCALE, tone_hz=ID_TONE_HZ)
+    sdr.tx_cyclic_buffer = True
+    sdr.tx(tone)
+
+    try:
+        for on, length in segments:
+            sdr.tx_hardwaregain_chan0 = TX_GAIN if on else ID_KEY_OFF_GAIN
+            time.sleep(length)
+    finally:
+        sdr.tx_hardwaregain_chan0 = TX_GAIN
+        sdr.tx_destroy_buffer()
+        sdr.tx(reference)
+
+
+def apply_band(name, callsign=None):
+    """Select a band and adopt its frequency and gains as configuration.
+
+    Returns (band, callsign). Raises bands.PolicyError or bands.LicenceError
+    before anything is applied, so a refused band never reaches the radio.
+
+    diagnose.py and visualize.py call this too, so every entry point tunes
+    and sets gains the same way.
+    """
+    global FC, TX_GAIN, RX_GAIN
+
+    band, resolved = bands.select(name, callsign)
+
+    FC = band.fc
+    TX_GAIN = band.tx_gain
+    RX_GAIN = band.rx_gain
+
+    return band, resolved
+
+
+def describe_band(band, callsign):
+    print("band            : %s" % band.describe().strip())
+
+    if not band.calibrated:
+        print("                  gains are PROVISIONAL for this band -- "
+              "run diagnose.py")
+    if band.requires_licence:
+        print("station         : %s, identifying every %d minutes (97.119)"
+              % (callsign, bands.ID_INTERVAL_SECONDS // 60))
+
+
+def add_band_arguments(parser):
+    """Shared --band/--callsign options for every entry point."""
+    parser.add_argument("--band", default=bands.DEFAULT_BAND,
+                        choices=sorted(bands.BANDS),
+                        help="band profile (default: %(default)s)")
+    parser.add_argument("--callsign", default=None,
+                        help="station callsign; required on amateur bands")
+
+    return parser
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Simple Pluto RADAR",
+        epilog=bands.listing(),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    add_band_arguments(parser)
+    parser.add_argument("--list-bands", action="store_true",
+                        help="print the band table and exit")
+
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+
+    if args.list_bands:
+        print(bands.listing())
+        return
+
+    # Resolve the band before touching the radio, so a refused configuration
+    # never reaches the point of generating a carrier.
+    try:
+        band, callsign = apply_band(args.band, args.callsign)
+    except (bands.PolicyError, bands.LicenceError) as exc:
+        print("REFUSED: %s" % exc)
+        raise SystemExit(2)
+
+    describe_band(band, callsign)
 
     T = N / FS
     k = B / T
@@ -148,8 +262,18 @@ def main():
     resolution = C / (2 * B)
     unlocked = 0
 
+    # Identify at the start of transmission, then on the interval.
+    if callsign and band.requires_licence:
+        send_station_id(sdr, callsign, reference)
+    last_id = time.monotonic()
+
     try:
         while True:
+            if (callsign and band.requires_licence
+                    and time.monotonic() - last_id >= bands.ID_INTERVAL_SECONDS):
+                send_station_id(sdr, callsign, reference)
+                last_id = time.monotonic()
+
             rx = sdr.rx()
 
             # The cyclic TX buffer free-runs against a free-running RX, so
@@ -190,6 +314,13 @@ def main():
                   % (ranges[peak], profile[peak], margin, quality, resolution))
 
     except KeyboardInterrupt:
+        # 97.119 also requires identification at the end of a communication.
+        if callsign and band.requires_licence:
+            try:
+                send_station_id(sdr, callsign, reference)
+            except Exception as exc:
+                print("WARNING: final station ID failed: %s" % exc)
+
         sdr.tx_destroy_buffer()
 
 

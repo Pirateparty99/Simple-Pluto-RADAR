@@ -45,6 +45,25 @@ On Windows, run `.\setup_env.ps1` and activate with
 The setup script creates a self-contained venv in `.venv/`, installs the
 dependencies, and checks that `libiio` is actually present.
 
+## Bands
+
+Frequency and gains travel together as a band profile, since both change with
+frequency:
+
+```bash
+python main.py --list-bands
+python main.py --band ism-2400
+```
+
+The default is `ism-5800`. `ism-2400` carries measured gains (tx -70, rx -3);
+the rest are provisional until you run `diagnose.py` on them.
+
+Amateur profiles exist but **non-ISM transmission is disabled** —
+`bands.ALLOW_NON_ISM_TRANSMIT` is `False`, and selecting one is refused before
+the radio is configured. Enabling it is a deliberate edit to
+[bands.py](bands.py), not a flag. When enabled, amateur profiles require a
+callsign and identify automatically in CW per 47 CFR 97.119.
+
 ## Configuration
 
 All radar parameters — Pluto URI, sample rate, carrier frequency, chirp length,
