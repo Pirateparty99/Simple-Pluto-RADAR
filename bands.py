@@ -87,13 +87,18 @@ BANDS = {
         tx_gain=-70, rx_gain=-3, calibrated=True,
         note="crowded: WiFi, Bluetooth, microwave ovens"),
 
-    # Not yet measured. Expect roughly 7.5 dB more path loss than 2.4 GHz
-    # and slightly less LNA gain, so tx starts higher; run diagnose.py.
+    # Measured with diagnose.py: lock 678 median / 914 best, 0% clipping,
+    # noise floor -27.1 dBFS, floors agreeing within 0.2 dB, ambient burst
+    # ratio 2x. Transmit with the Pluto driving the antenna directly -- the
+    # 2.4 GHz PA is an ADL5606 (1800-2700 MHz) and costs about 50 dB here.
+    #
+    # RX sits 45 dB higher than on 2.4 GHz because this band does not
+    # saturate the receiver, so the gain is available to use.
     "ism-5800": Band(
         "ism-5800", 5_800_000_000, 5_725_000_000, 5_875_000_000,
         "Part 15 ISM", False,
-        tx_gain=-50, rx_gain=-3, calibrated=False,
-        note="overlaps U-NII-3 WiFi but usually far quieter than 2.4"),
+        tx_gain=-70, rx_gain=42, calibrated=True,
+        note="overlaps U-NII-3 WiFi but measured >60 dB quieter than 2.4"),
 
     "ham-13cm": Band(
         "ham-13cm", 2_400_000_000, 2_390_000_000, 2_450_000_000,

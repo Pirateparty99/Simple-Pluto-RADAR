@@ -128,13 +128,24 @@ python main.py --band ism-2400
 | Profile | Centre | Basis | Gains |
 | --- | --- | --- | --- |
 | `ism-2400` | 2.450 GHz | Part 15 ISM | tx -70, rx -3 — **measured** |
-| `ism-5800` | 5.800 GHz | Part 15 ISM | provisional |
+| `ism-5800` | 5.800 GHz | Part 15 ISM | tx -70, rx 42 — **measured** |
 | `ham-13cm` | 2.400 GHz | Part 97 amateur | provisional |
 | `ham-5cm` | 5.690 GHz | Part 97 amateur | provisional |
 
 The default is `ism-5800`. Profiles marked provisional have not been measured
 on this hardware; `main.py` says so at startup and you should run
 `diagnose.py` before trusting them.
+
+Note the receive gains: 42 dB at 5.8 GHz against -3 dB at 2.4 GHz. That is
+not a typo. The 2.4 GHz band saturates the receiver through the LNAs, forcing
+the Pluto to its minimum, while 5.8 GHz measured more than 60 dB quieter and
+leaves the gain available to use. It is the clearest single argument for
+operating up there.
+
+**Amplifiers are band-specific too.** The 2.4 GHz PA in this build is an
+ADL5606, specified 1800-2700 MHz. Left in the transmit chain at 5.8 GHz it
+cost about 50 dB — chirp lock fell from 914 to 106 and needed `TX_GAIN` of
+-20 instead of -70. Take it out of line when changing bands.
 
 ### Non-ISM transmission is disabled
 
