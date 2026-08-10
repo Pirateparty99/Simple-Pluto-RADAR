@@ -211,9 +211,9 @@ def survey_environment(sdr):
                           "2.4 GHz")
             elsewhere = "5.8 GHz, which is usually far quieter"
         else:
-            neighbours = ("5 GHz WiFi (U-NII) shares this range")
-            elsewhere = ("2.4 GHz, though that band is normally busier, "
-                         "or a quieter corner of 5 GHz")
+            neighbours = "5 GHz WiFi (U-NII) shares this range"
+            elsewhere = ("another part of the 5.725-5.875 GHz segment, away "
+                         "from the U-NII-3 channel centres")
 
         print("\n  The band is BURSTY, not just noisy. Individual %.1f ms"
               % (sdr.rx_buffer_size / sdr.sample_rate * 1e3))
@@ -221,7 +221,9 @@ def survey_environment(sdr):
               % burst_ratio)
         print("  packets -- %s, and you are at %.3f GHz." % (neighbours, ghz))
 
-        if levels.max() < cfg.ADC_FULL_SCALE * 0.02:
+        # 5% of full scale is about -26 dBFS: loud enough to matter against
+        # a weak echo, but well short of anything that threatens headroom.
+        if levels.max() < cfg.ADC_FULL_SCALE * 0.05:
             print("  Absolute levels are low, though: the loudest buffer is")
             print("  %.1f LSB out of %d, so this is a quiet band with"
                   % (levels.max(), cfg.ADC_FULL_SCALE))
@@ -310,19 +312,19 @@ def choose_rx_gain(sdr, reference):
 
     unstable = max((r["spread"] for _, r in sweep), default=1.0)
 
-    # One LSB of RMS is what an ADC reads with nothing connected to it. If
-    # the quietest gain setting sits on that floor, the receiver is not
-    # hearing a quiet band -- it is hearing nothing, and the rest of this
-    # run describes a disconnected antenna rather than an RF environment.
+    # One LSB of RMS is what an ADC reads with nothing connected. Judge this
+    # at MAXIMUM gain, not minimum: a quiet band legitimately runs out of
+    # ADC resolution at low gain, and only a genuinely dead input still
+    # sits on the floor with the receiver turned all the way up.
     quantisation_dbfs = 20 * np.log10(1.0 / cfg.ADC_FULL_SCALE)
-    lowest = sweep[-1][1]["dbfs_quiet"] if sweep else 0.0
+    highest = sweep[0][1]["dbfs_quiet"] if sweep else 0.0
 
-    if lowest < quantisation_dbfs + DEAD_INPUT_MARGIN_DB:
-        print("\n  WARNING: at %d dB gain the level is %.1f dBFS, which is the"
-              % (sweep[-1][0], lowest))
-        print("  ADC quantisation floor (%.1f dBFS). That is what you read"
+    if highest < quantisation_dbfs + DEAD_INPUT_MARGIN_DB:
+        print("\n  WARNING: even at %d dB gain the level is %.1f dBFS, which"
+              % (sweep[0][0], highest))
+        print("  is the ADC quantisation floor (%.1f dBFS). That is what you"
               % quantisation_dbfs)
-        print("  with nothing connected -- not a quiet band.")
+        print("  read with nothing connected -- not a quiet band.")
         print("  Check, in order:")
         print("    - RX antenna actually attached to the RX SMA")
         print("    - LNA powered (micro-USB or DC barrel; the Pluto does")
