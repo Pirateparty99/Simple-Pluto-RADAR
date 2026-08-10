@@ -8,10 +8,12 @@ Run it with the antennas connected as you intend to use them:
 
     python diagnose.py
 """
+import argparse
 import time
 
 import numpy as np
 
+import bands
 import main as cfg
 from radar_functions.chirp import chirp
 from radar_functions.dechirp import find_chirp_start
@@ -46,13 +48,43 @@ SURVEY_BUFFERS = 40
 # considered bursty rather than merely noisy.
 BURST_RATIO_LIMIT = 10.0
 
+# The ambient survey always runs at this gain, not at whatever RX_GAIN
+# happens to be set to. Otherwise the number moves whenever the gain is
+# retuned and runs cannot be compared across sessions.
+SURVEY_REFERENCE_GAIN = 30
+
+# Margin above the ADC quantisation floor below which the receiver is
+# hearing nothing at all rather than hearing something quiet.
+DEAD_INPUT_MARGIN_DB = 6.0
+
 # Where we want the noise floor to sit: low enough to leave headroom for
 # strong returns, high enough to stay well clear of the quantisation floor.
 TARGET_FLOOR_DBFS = -20.0
 
-# AD9361 receive gain limits, from hardwaregain_available "[-3 1 71]".
+# Fallback receive gain limits, used only if the device will not report its
+# own. The real range is read at runtime -- see rx_gain_limits().
 RX_GAIN_MIN = -3
 RX_GAIN_MAX = 71
+
+
+def rx_gain_limits(sdr):
+    """Read the valid receive gain range for the current tuning.
+
+    The AD9361's gain table is band-dependent: roughly -3..71 dB below
+    4 GHz but narrower above it. Writing an out-of-range value raises
+    OSError(EINVAL), so the sweep has to be built from what the device
+    reports rather than from a constant. The attribute reads back in the
+    form "[min step max]".
+    """
+    try:
+        raw = sdr._get_iio_attr_str("voltage0", "hardwaregain_available",
+                                    False)
+        low, _step, high = (float(p) for p in raw.strip().strip("[]").split())
+        return int(low), int(high)
+    except Exception as exc:
+        print("  note: could not read hardwaregain_available (%s);"
+              " falling back to %d..%d dB" % (exc, RX_GAIN_MIN, RX_GAIN_MAX))
+        return RX_GAIN_MIN, RX_GAIN_MAX
 
 
 # Seconds to wait after changing gain before capturing. The AD9361 runs
@@ -148,37 +180,60 @@ def survey_environment(sdr):
     Bluetooth, microwave ovens, all of which live in this band -- gives
     buffers that differ by orders of magnitude over milliseconds.
     """
+    # Pin the gain so successive runs are comparable, whatever RX_GAIN is.
+    original = sdr.rx_hardwaregain_chan0
+    sdr.rx_hardwaregain_chan0 = SURVEY_REFERENCE_GAIN
     restart_rx(sdr)
 
     levels = np.array([rms(sdr.rx()) for _ in range(SURVEY_BUFFERS)])
-    clips = np.array([0.0])
+
+    sdr.rx_hardwaregain_chan0 = original
 
     p10, p50, p90 = np.percentile(levels, [10, 50, 90])
     burst_ratio = float(levels.max() / (levels.min() + 1e-20))
 
-    print("\nAmbient survey (%d buffers, %.1f ms each, transmitter quiet):"
+    print("\nAmbient survey (%d buffers, %.1f ms each, transmitter quiet,"
+          " RX gain pinned to %d dB):"
           % (SURVEY_BUFFERS,
-             sdr.rx_buffer_size / sdr.sample_rate * 1e3))
+             sdr.rx_buffer_size / sdr.sample_rate * 1e3,
+             SURVEY_REFERENCE_GAIN))
     print("  quietest %.1f | 10%% %.1f | median %.1f | 90%% %.1f | loudest %.1f LSB"
           % (levels.min(), p10, p50, p90, levels.max()))
     print("  loudest / quietest = %.0fx" % burst_ratio)
 
     if burst_ratio > BURST_RATIO_LIMIT:
+        ghz = cfg.FC / 1e9
+        # Name the actual occupants of the band being measured, and judge
+        # severity by absolute level too: a 100x ratio between 2 and 200 LSB
+        # is not the same problem as one between 200 and 20000.
+        if ghz < 3.0:
+            neighbours = ("WiFi, Bluetooth and microwave ovens all occupy "
+                          "2.4 GHz")
+            elsewhere = "5.8 GHz, which is usually far quieter"
+        else:
+            neighbours = ("5 GHz WiFi (U-NII) shares this range")
+            elsewhere = ("2.4 GHz, though that band is normally busier, "
+                         "or a quieter corner of 5 GHz")
+
         print("\n  The band is BURSTY, not just noisy. Individual %.1f ms"
               % (sdr.rx_buffer_size / sdr.sample_rate * 1e3))
         print("  captures differ by %.0fx, which is interference arriving in"
               % burst_ratio)
-        print("  packets -- WiFi, Bluetooth and microwave ovens all occupy")
-        print("  2.4 GHz, and %.3f GHz sits in the middle of it."
-              % (cfg.FC / 1e9))
-        print("  This is an RF environment problem, not a settings problem.")
-        print("  Options, roughly in order of effort:")
-        print("    - Move FC to a quieter corner of the band (2.400 or")
-        print("      2.483 GHz) and re-run; your filters still pass it.")
-        print("    - Test somewhere with less 2.4 GHz traffic, or disable")
-        print("      nearby WiFi while measuring.")
-        print("    - Accept it: main.py already discards buffers that fail")
-        print("      to lock, so bursts cost throughput, not correctness.")
+        print("  packets -- %s, and you are at %.3f GHz." % (neighbours, ghz))
+
+        if levels.max() < cfg.ADC_FULL_SCALE * 0.02:
+            print("  Absolute levels are low, though: the loudest buffer is")
+            print("  %.1f LSB out of %d, so this is a quiet band with"
+                  % (levels.max(), cfg.ADC_FULL_SCALE))
+            print("  occasional traffic rather than a hostile one. It may")
+            print("  well be usable as is.")
+        else:
+            print("  Options, roughly in order of effort:")
+            print("    - Move FC to %s." % elsewhere)
+            print("    - Measure somewhere with less traffic, or disable")
+            print("      nearby WiFi while measuring.")
+            print("    - Accept it: main.py discards buffers that fail to")
+            print("      lock, so bursts cost throughput, not correctness.")
 
     return burst_ratio
 
@@ -208,8 +263,10 @@ def choose_rx_gain(sdr, reference):
     sdr.tx(reference)
 
     original = sdr.rx_hardwaregain_chan0
+    gain_min, gain_max = rx_gain_limits(sdr)
 
-    print("\nReceive gain sweep, transmitter quiet:")
+    print("\nReceive gain sweep, transmitter quiet (device allows %d..%d dB):"
+          % (gain_min, gain_max))
     print("%-9s %10s %10s %10s %8s"
           % ("RX gain", "quiet dBFS", "med dBFS", "worst clip", "spread"))
     print("-" * 52)
@@ -218,13 +275,13 @@ def choose_rx_gain(sdr, reference):
     best_dbfs = None
     sweep = []
 
-    # The step lands on 1, not on RX_GAIN_MIN, so add the minimum explicitly.
-    # Without it the sweep can fall back to a gain it never measured and
-    # report "even at minimum gain the floor is too high" when the minimum
-    # would in fact have been fine.
-    gains = list(range(RX_GAIN_MAX, RX_GAIN_MIN, -10))
-    if RX_GAIN_MIN not in gains:
-        gains.append(RX_GAIN_MIN)
+    # The step will not land on the minimum, so add it explicitly. Without
+    # it the sweep can fall back to a gain it never measured and report
+    # "even at minimum gain the floor is too high" when the minimum would
+    # in fact have been fine.
+    gains = list(range(gain_max, gain_min, -10))
+    if gain_min not in gains:
+        gains.append(gain_min)
 
     for gain in gains:
         sdr.rx_hardwaregain_chan0 = gain
@@ -253,6 +310,27 @@ def choose_rx_gain(sdr, reference):
 
     unstable = max((r["spread"] for _, r in sweep), default=1.0)
 
+    # One LSB of RMS is what an ADC reads with nothing connected to it. If
+    # the quietest gain setting sits on that floor, the receiver is not
+    # hearing a quiet band -- it is hearing nothing, and the rest of this
+    # run describes a disconnected antenna rather than an RF environment.
+    quantisation_dbfs = 20 * np.log10(1.0 / cfg.ADC_FULL_SCALE)
+    lowest = sweep[-1][1]["dbfs_quiet"] if sweep else 0.0
+
+    if lowest < quantisation_dbfs + DEAD_INPUT_MARGIN_DB:
+        print("\n  WARNING: at %d dB gain the level is %.1f dBFS, which is the"
+              % (sweep[-1][0], lowest))
+        print("  ADC quantisation floor (%.1f dBFS). That is what you read"
+              % quantisation_dbfs)
+        print("  with nothing connected -- not a quiet band.")
+        print("  Check, in order:")
+        print("    - RX antenna actually attached to the RX SMA")
+        print("    - LNA powered (micro-USB or DC barrel; the Pluto does")
+        print("      not supply bias-tee power)")
+        print("    - every SMA in the receive chain seated")
+        print("  Removing a passive filter cannot lower the received level;")
+        print("  if it appears to, something else came loose with it.")
+
     if violations or unstable > 3.0:
         print("\n  WARNING: this sweep is not trustworthy.")
         for g_hi, g_lo, delta in violations:
@@ -269,7 +347,7 @@ def choose_rx_gain(sdr, reference):
         print("  back clean.")
 
     if best is None:
-        best = RX_GAIN_MIN
+        best = gain_min
         print("\n  Even at minimum gain the floor is too high. The LNAs are")
         print("  feeding too much into the Pluto -- consider removing one,")
         print("  or adding attenuation ahead of the RX input.")
@@ -288,7 +366,22 @@ def choose_rx_gain(sdr, reference):
     return best
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=bands.listing(),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    cfg.add_band_arguments(parser)
+    args = parser.parse_args(argv)
+
+    try:
+        band, callsign = cfg.apply_band(args.band, args.callsign)
+    except (bands.PolicyError, bands.LicenceError) as exc:
+        print("REFUSED: %s" % exc)
+        raise SystemExit(2)
+
+    cfg.describe_band(band, callsign)
+
     reference = chirp(cfg.N, cfg.B, cfg.FS, cfg.TX_SCALE)
 
     print("Connecting to %s ..." % cfg.URI)
