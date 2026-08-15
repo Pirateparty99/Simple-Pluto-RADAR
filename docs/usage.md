@@ -7,9 +7,40 @@ How to set up the environment, run the radar, and change the waveform.
 ### Hardware
 
 - ADALM-Pluto SDR (PlutoSDR)
-- Two 2.4 GHz antennas (one TX, one RX)
+- One transmit and at least one receive antenna covering your chosen band
+- A bandpass filter per receive path, ahead of the LNA
 - Optional but recommended: attenuators or a coax jumper between TX and RX for
   bench testing, so you are not blasting a live antenna into a nearby receiver
+
+### The reference build
+
+```
+TX   Pluto TX1 SMA ─────────────────────────► log-periodic (1.35-9.5 GHz)
+
+RX   Vivaldi (0.8-6 GHz) ─► VBFZ-5500-S+ ─► LaNA WB ─► Pluto RX SMA
+                            4.9-6.2 GHz     ~18 dB
+```
+
+**Filter before the amplifier, not after.** A filter downstream of the LNA
+cannot stop out-of-band energy from compressing the LNA — it only cleans up
+whatever survives. As a preselector, the VBFZ-5500-S+ rejects everything
+outside 4.9–6.2 GHz before it reaches any gain stage, which is what keeps
+cellular, 2.4 GHz WiFi and the rest out of the receiver.
+
+At 1.3 GHz wide the filter is not a narrow preselector: it passes the whole
+5 GHz U-NII range along with the 5.725–5.875 GHz ISM segment. It removes the
+out-of-band loading, not in-band WiFi.
+
+**The transmit path is unfiltered in this build.** Nothing stops Pluto LO
+leakage, mixer images or harmonics leaving the antenna. That is tolerable at
+the very low transmit powers used here (`TX_GAIN` of -70 dB), but a transmit
+bandpass is worth adding before running any amplifier.
+
+**Amplifiers and filters are band-specific; antennas here are not.** The
+Vivaldi and log-periodic are frequency-independent designs covering both
+supported bands, but the VBFZ-5500-S+ passes nothing at 2.4 GHz, and the
+2.4 GHz PA (an ADL5606, 1800–2700 MHz) costs about 50 dB at 5.8 GHz. Changing
+bands means changing filters and amplifiers, not antennas — see section 4.
 
 **The transmit antenna must be on TX1, the SMA connector.** This code
 transmits on channel 0 only, and `adi.Pluto` exposes exactly one complex
@@ -411,10 +442,12 @@ It runs three stages in order, each of which invalidates the next if it fails:
 
 It stops at the first solid lock rather than continuing to raise power, and
 recommends a `TX_GAIN` and `RX_GAIN` pair. If it locks at no gain at all, work
-through: both antennas connected and RX on the RX SMA; bandpass filters
-passing 2.45 GHz; LNAs actually powered (the Pluto does not supply bias-tee
-power on RX). A wired loopback through attenuators takes the antennas out of
-the question — and also takes the interference out of it, which makes it the
+through: both antennas connected and RX on the RX SMA; the receive bandpass
+actually passing your carrier — a VBFZ-5500-S+ passes 4.9–6.2 GHz and nothing
+at 2.4 GHz, so it silently kills the lower band; any transmit amplifier being
+in band; LNAs actually powered (the Pluto does not supply bias-tee power on
+RX). A wired loopback through attenuators takes the antennas out of the
+question — and also takes the interference out of it, which makes it the
 fastest way to separate an RF-environment problem from a wiring one.
 
 **Peaks jump to a different random range every buffer**
@@ -441,9 +474,13 @@ means the environment is bursty rather than merely noisy.
 
 What to do, in order of effort:
 
-- Move `FC` to a quieter corner of the band — 2.400 or 2.483 GHz, both still
-  inside a 2.4 GHz bandpass filter — and re-run.
-- Measure somewhere with less 2.4 GHz traffic, or turn off nearby WiFi.
+- Move `FC` to a quieter corner of the same band and re-run, staying inside
+  both your filter's passband and the ISM allocation. On 5.8 GHz that means
+  somewhere in 5.725–5.875 GHz away from the U-NII-3 channel centres.
+- Switch bands entirely — `--band ism-5800` measured more than 60 dB quieter
+  than 2.4 GHz on this hardware. Remember the filters and any amplifier have
+  to change with it.
+- Measure somewhere with less traffic, or turn off nearby WiFi.
 - Accept it. `main.py` discards buffers that fail `MIN_LOCK_QUALITY`, so
   interference costs throughput, not correctness. You get fewer usable range
   profiles per second, not wrong ones.

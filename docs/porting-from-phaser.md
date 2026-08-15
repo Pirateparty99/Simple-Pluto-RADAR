@@ -147,13 +147,19 @@ correlation used for chirp alignment degrades.
 
 ## Hardware notes
 
-These apply to the EVAL-CN0417-EBZ + 2× Nooelec LaNA WB + 2.4 GHz BPF setup.
+The build these were written against has since moved to 5.8 GHz: Vivaldi
+antennas into VBFZ-5500-S+ bandpass filters into the LaNA WBs, with the Pluto
+driving a log-periodic directly on transmit. The notes below still apply
+wherever the parts do.
 
 - **The EVAL-CN0417-EBZ is a power amplifier, not an LNA.** It is an ADL5606,
   ~20 dB gain, P1dB ≈ +30.8 dBm. That makes it the right part for the transmit
-  side, but with the Pluto's ~+7 dBm maximum output you are looking at roughly
-  0.5 W radiated. `TX_GAIN` defaults to -40 dB for that reason. Raise it
-  slowly.
+  side at 2.4 GHz, but with the Pluto's ~+7 dBm maximum output you are looking
+  at roughly 0.5 W radiated, so raise `TX_GAIN` slowly.
+- **It is also useless outside 1800–2700 MHz.** Left in the transmit chain at
+  5.8 GHz it cost about 50 dB: chirp lock fell from 914 to 106 and `TX_GAIN`
+  had to rise from -70 to -20 to compensate. Amplifiers and filters are
+  band-specific in a way that wideband antennas are not.
 - **Two RX LNAs implies two RX channels, and a stock ADALM-Pluto only brings
   out one RX SMA.** The Phaser's Pluto is modified: firmware set to
   `compatible=ad9361`, `mode=2r2t`, plus a U.FL soldered to the unpopulated
@@ -166,13 +172,20 @@ These apply to the EVAL-CN0417-EBZ + 2× Nooelec LaNA WB + 2.4 GHz BPF setup.
   absorber between the antennas.
 - **The Pluto does not supply bias-tee power on RX.** Power the LaNA WBs over
   micro-USB or the DC barrel connector.
-- **The bandpass filters are a good call.** They suppress Pluto LO leakage and
-  images, and stop the PA amplifying out-of-band noise. An 83 MHz-wide ISM
-  filter passes any sweep the Pluto can generate.
-- **Check your transmit rights.** 2.45 GHz is shared ISM. Half a watt of FMCW
-  is not a trivial emission, and Part 15 conditions may not cover a chirped
-  radar waveform. The 2390–2450 MHz amateur allocation is the cleaner route if
-  you are licensed.
+- **Put the bandpass ahead of the LNA, and make sure it is a bandpass.** As a
+  preselector it keeps out-of-band energy out of the amplifier; downstream it
+  only tidies up what already compressed the amplifier. The original build
+  used Crystek CLPFL-2400 *low-pass* filters, which pass DC–2400 MHz: they let
+  every cellular and ISM signal below 2.4 GHz into a 300 MHz–8 GHz LNA while
+  attenuating the 2.45 GHz carrier itself. The VBFZ-5500-S+ (4.9–6.2 GHz)
+  replaced them. Any filter comfortably wider than the sweep will do — the
+  Pluto cannot generate more than a few tens of MHz of bandwidth.
+- **Check your transmit rights.** 2.45 and 5.8 GHz are both shared ISM. Half a
+  watt of FMCW is not a trivial emission, and Part 15 conditions may not cover
+  a chirped radar waveform. Amateur allocations are the cleaner route if you
+  are licensed, but note that `bands.ALLOW_NON_ISM_TRANSMIT` is `False` and
+  amateur profiles are refused until that is deliberately changed — see
+  [usage.md](usage.md).
 
 ## Sources
 
