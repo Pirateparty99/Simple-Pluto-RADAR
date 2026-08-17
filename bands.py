@@ -53,7 +53,8 @@ class Band:
     """
 
     def __init__(self, name, fc, low, high, authority, requires_licence,
-                 tx_gain, rx_gain, calibrated=False, note=""):
+                 tx_gain, rx_gain, calibrated=False, ref_lock=None,
+                 ref_floor_dbfs=None, note=""):
         self.name = name
         self.fc = fc
         self.low = low
@@ -63,6 +64,11 @@ class Band:
         self.tx_gain = tx_gain
         self.rx_gain = rx_gain
         self.calibrated = calibrated
+        # What a good run looked like, so a later one has something to be
+        # measured against. Without these a degraded run just looks
+        # mediocre rather than obviously worse than before.
+        self.ref_lock = ref_lock
+        self.ref_floor_dbfs = ref_floor_dbfs
         self.note = note
 
     def contains(self, frequency):
@@ -85,6 +91,7 @@ BANDS = {
         "ism-2400", 2_450_000_000, 2_400_000_000, 2_483_500_000,
         "Part 15 ISM", False,
         tx_gain=-70, rx_gain=-3, calibrated=True,
+        ref_lock=2344, ref_floor_dbfs=-21.2,
         note="crowded: WiFi, Bluetooth, microwave ovens"),
 
     # Measured with diagnose.py: lock 678 median / 914 best, 0% clipping,
@@ -98,6 +105,7 @@ BANDS = {
         "ism-5800", 5_800_000_000, 5_725_000_000, 5_875_000_000,
         "Part 15 ISM", False,
         tx_gain=-70, rx_gain=42, calibrated=True,
+        ref_lock=678, ref_floor_dbfs=-27.1,
         note="overlaps U-NII-3 WiFi but measured >60 dB quieter than 2.4"),
 
     "ham-13cm": Band(

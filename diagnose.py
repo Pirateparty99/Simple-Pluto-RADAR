@@ -67,6 +67,70 @@ RX_GAIN_MIN = -3
 RX_GAIN_MAX = 71
 
 
+# A run is called a regression if it needs this much more transmit power,
+# or if lock falls to this fraction of what the band recorded.
+TX_REGRESSION_DB = 10
+LOCK_REGRESSION_RATIO = 0.25
+
+
+def compare_to_calibration(band, tx_gain, lock, floor_dbfs):
+    """Measure this run against the band's recorded calibration.
+
+    A hardware change can leave a run looking merely mediocre while being
+    far worse than what this band already achieved. Without a reference
+    that takes a careful side-by-side to notice, so state it outright.
+    """
+    if not band.calibrated or band.ref_lock is None:
+        print("\n%s has no recorded calibration to compare against."
+              % band.name)
+        return
+
+    def fmt(value, spec="%d"):
+        return "n/a" if value is None else spec % value
+
+    print("\nAgainst the calibration recorded for %s:" % band.name)
+    print("  %-16s %10s %11s" % ("", "recorded", "this run"))
+    print("  %-16s %10s %11s" % ("TX gain for lock", "%d dB" % band.tx_gain,
+                                 fmt(tx_gain, "%d dB")))
+    print("  %-16s %10s %11s" % ("lock quality", fmt(band.ref_lock),
+                                 fmt(lock)))
+    print("  %-16s %10s %11s"
+          % ("noise floor", fmt(band.ref_floor_dbfs, "%.1f dBFS"),
+             fmt(floor_dbfs, "%.1f dBFS")))
+
+    problems = []
+
+    if tx_gain is None:
+        problems.append("no lock at any transmit gain, where %d dB sufficed "
+                        "before" % band.tx_gain)
+    elif tx_gain > band.tx_gain + TX_REGRESSION_DB:
+        problems.append("needs %d dB more transmit power than recorded"
+                        % (tx_gain - band.tx_gain))
+
+    if lock is not None and lock < band.ref_lock * LOCK_REGRESSION_RATIO:
+        problems.append("lock is %.0fx below the recorded value"
+                        % (band.ref_lock / max(lock, 1e-9)))
+
+    if floor_dbfs is not None and band.ref_floor_dbfs is not None:
+        delta = floor_dbfs - band.ref_floor_dbfs
+        if abs(delta) > 6:
+            print("\n  Noise floor moved %+.1f dB. On its own that is not a"
+                  % delta)
+            print("  fault -- a preselector lowering it is the point -- but"
+                  " it")
+            print("  should improve lock, not cost it.")
+
+    if problems:
+        print("\n  REGRESSION against this band's calibration:")
+        for problem in problems:
+            print("    - %s" % problem)
+        print("  Something in the RF chain changed for the worse since those")
+        print("  numbers were recorded. Re-check whatever was altered most")
+        print("  recently before trusting this run.")
+    else:
+        print("\n  Consistent with the recorded calibration.")
+
+
 def rx_gain_limits(sdr):
     """Read the valid receive gain range for the current tuning.
 
@@ -436,6 +500,7 @@ def main(argv=None):
     print("-" * 60)
 
     best = None
+    best_lock = None
     levels = []
     for gain in GAIN_SWEEP:
         sdr.tx_destroy_buffer()
@@ -466,6 +531,7 @@ def main(argv=None):
         # up is real power into the PA.
         if quality >= GOOD_ENOUGH:
             best = gain
+            best_lock = result["quality"]
             break
 
     # --- re-measure the floor ---------------------------------------------
@@ -540,6 +606,9 @@ def main(argv=None):
         print("Set TX_GAIN = %d and RX_GAIN = %d in main.py."
               % (best, rx_gain))
         print("Prefer the lowest gain that locks, especially behind a PA.")
+
+    floor_after_dbfs = 20 * np.log10(floor_after / cfg.ADC_FULL_SCALE + 1e-20)
+    compare_to_calibration(band, best, best_lock, floor_after_dbfs)
 
 
 if __name__ == "__main__":

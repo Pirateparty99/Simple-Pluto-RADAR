@@ -167,6 +167,30 @@ The default is `ism-5800`. Profiles marked provisional have not been measured
 on this hardware; `main.py` says so at startup and you should run
 `diagnose.py` before trusting them.
 
+### Calibration is a reference, not just a setting
+
+A calibrated profile also records what a good run looked like — the lock
+quality and noise floor achieved at those gains. `diagnose.py` compares every
+run against them and says outright when one is worse:
+
+```
+Against the calibration recorded for ism-5800:
+                     recorded    this run
+  TX gain for lock     -70 dB      -20 dB
+  lock quality            678         162
+  noise floor      -27.1 dBFS  -31.4 dBFS
+
+  REGRESSION against this band's calibration:
+    - needs 50 dB more transmit power than recorded
+    - lock is 4x below the recorded value
+```
+
+This exists because a degraded run does not look broken. It completes, prints
+plausible numbers, and recommends gains — and without something to compare
+against, spotting that it is far worse than last week takes a careful
+side-by-side. Every hardware change in this project's history that caused a
+regression was found that way, after the fact.
+
 Note the receive gains: 42 dB at 5.8 GHz against -3 dB at 2.4 GHz. That is
 not a typo. The 2.4 GHz band saturates the receiver through the LNAs, forcing
 the Pluto to its minimum, while 5.8 GHz measured more than 60 dB quieter and
@@ -490,6 +514,26 @@ noise floor as a 10th percentile (the channel *between* packets), clipping as
 the worst case across buffers, and lock quality as both median and best. Chirp
 lock is judged on the best buffer — the question is whether the chirp is
 findable when the channel is clear.
+
+**`REGRESSION against this band's calibration`**
+This run is measurably worse than what the band recorded. The most recent
+change to the RF chain is the first suspect, whatever it was and however
+harmless it looked.
+
+Watch for the case where the noise floor **improves** while lock gets worse.
+Those move together under ordinary loss, so a filter that drops the floor by
+20 dB should improve lock, not cost it. If both fall, the filter is
+attenuating your signal along with the noise, which for an in-band part means
+it is faulty, mis-seated, or not in the path you think it is.
+
+Two tests separate those:
+
+- Bypass the suspect part on the **active** path only and re-run. If the
+  numbers return to the recorded values, that part is the cause.
+- Keep it fitted and run the *other* band. A 5.8 GHz filter passes nothing at
+  2.4 GHz, so lock there should be dreadful. If 2.4 GHz is unaffected, the
+  part is not in the active receive path at all — remember the code listens
+  only on channel 0, the RX SMA, so anything fitted to RX2 does nothing.
 
 **Receiver saturated — RX rms near 2048 even with the transmitter off**
 Powered LNAs plus `RX_GAIN` is more gain than the Pluto needs, and ambient
